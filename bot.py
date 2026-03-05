@@ -229,7 +229,7 @@ def yandexgpt_complete(messages: list[dict], system: str = "") -> str:
         },
         json={
             "modelUri": f"gpt://{YANDEX_FOLDER_ID}/yandexgpt/latest",
-            "completionOptions": {"stream": False, "temperature": 0.6, "maxTokens": 1000},
+            "completionOptions": {"stream": False, "temperature": 0.6, "maxTokens": "1000"},
             "messages": payload_messages,
         },
         timeout=30,
