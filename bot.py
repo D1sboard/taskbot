@@ -49,6 +49,7 @@ STT_PROVIDER = os.environ.get("STT_PROVIDER", "speechkit").lower()
 # Яндекс Cloud
 YANDEX_API_KEY = os.environ.get("YANDEX_API_KEY", "")
 YANDEX_FOLDER_ID = os.environ.get("YANDEX_FOLDER_ID", "")
+YANDEX_SPEECHKIT_KEY = os.environ.get("YANDEX_SPEECHKIT_KEY", "") or YANDEX_API_KEY
 
 # GigaChat (Сбер)
 GIGACHAT_CLIENT_ID = os.environ.get("GIGACHAT_CLIENT_ID", "")
@@ -87,7 +88,7 @@ def transcribe_speechkit(ogg_path: str) -> str:
 
     resp = requests.post(
         "https://stt.api.cloud.yandex.net/speech/v1/stt:recognize",
-        headers={"Authorization": f"Api-Key {YANDEX_API_KEY}"},
+        headers={"Authorization": f"Api-Key {YANDEX_SPEECHKIT_KEY}"},
         params={
             "folderId": YANDEX_FOLDER_ID,
             "lang": "ru-RU",
