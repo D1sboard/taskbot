@@ -1,0 +1,14 @@
+# Основные зависимости
+python-telegram-bot==21.6
+requests>=2.31.0
+APScheduler==3.10.4
+
+# Для Vosk (локальная транскрипция, бесплатно)
+# Раскомментируй если используешь STT_PROVIDER=vosk
+# vosk>=0.3.45
+
+# ffmpeg нужен системно для Vosk (конвертация OGG→WAV)
+# Ubuntu/Debian: sudo apt install ffmpeg
+# macOS: brew install ffmpeg
+
+pytz>=2023.3
