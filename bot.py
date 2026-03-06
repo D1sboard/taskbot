@@ -250,25 +250,242 @@ def ai_complete(messages: list[dict], system: str = "") -> str:
 
 # ── Разбор задачи и определение намерения ─────
 
+
+# ══════════════════════════════════════════════
+# БЛОК: РУССКИЙ ПАРСЕР ВРЕМЕНИ
+# Понимает любые формы: "через 10 минут", "послезавтра в 9 утра",
+# "в следующую пятницу", "15 декабря в 18:00" и т.д.
+# ══════════════════════════════════════════════
+
+WEEKDAYS_RU = {
+    "понедельник": 0, "понедельника": 0, "понедельнику": 0,
+    "вторник": 1, "вторника": 1, "вторнику": 1,
+    "среда": 2, "среду": 2, "среды": 2, "среде": 2,
+    "четверг": 3, "четверга": 3, "четвергу": 3,
+    "пятница": 4, "пятницу": 4, "пятницы": 4, "пятнице": 4,
+    "суббота": 5, "субботу": 5, "субботы": 5, "субботе": 5,
+    "воскресенье": 6, "воскресенья": 6, "воскресенью": 6, "воскресенье": 6,
+}
+
+MONTHS_RU = {
+    "январ": 1, "феврал": 2, "март": 3, "апрел": 4,
+    "ма": 5, "май": 5, "мая": 5, "июн": 6, "июл": 7,
+    "август": 8, "сентябр": 9, "октябр": 10, "ноябр": 11, "декабр": 12,
+}
+
+NUM_WORDS_RU = {
+    "один": 1, "одну": 1, "одной": 1, "одного": 1,
+    "два": 2, "две": 2, "двух": 2, "двум": 2,
+    "три": 3, "трёх": 3, "трех": 3, "трём": 3,
+    "четыре": 4, "четырёх": 4, "четырех": 4,
+    "пять": 5, "пяти": 5, "шесть": 6, "шести": 6,
+    "семь": 7, "семи": 7, "восемь": 8, "восьми": 8,
+    "девять": 9, "девяти": 9, "десять": 10, "десяти": 10,
+    "пол": 0.5, "полчаса": 0.5, "полчас": 0.5,
+    "четверть": 0.25,
+    "час": 1, "часа": 1, "часов": 1, "часу": 1,
+    "минут": 1, "минуты": 1, "минуту": 1, "минутку": 1,
+    "сутки": 24, "суток": 24,
+    "неделю": 7, "недели": 7, "неделя": 7, "неделей": 7,
+}
+
+
+def _extract_number(word: str) -> Optional[float]:
+    """Извлекает число из слова — цифрой или словом."""
+    if word.isdigit():
+        return float(word)
+    return NUM_WORDS_RU.get(word.lower())
+
+
+def _parse_time_of_day(text: str) -> Optional[tuple]:
+    """Парсит время из строки. Возвращает (hour, minute) или None."""
+    text = text.lower()
+
+    # Полночь / полдень
+    if any(w in text for w in ["полночь", "полночи", "00:00"]):
+        return (0, 0)
+    if any(w in text for w in ["полдень", "полудня", "12:00"]):
+        return (12, 0)
+
+    # Утро/день/вечер/ночь без времени
+    time_of_day_defaults = {
+        "утр": 9, "утром": 9,
+        "днём": 14, "днем": 14, "дня": 14,
+        "вечер": 19, "вечером": 19,
+        "ноч": 21, "ночью": 21,
+    }
+
+    # HH:MM
+    m = re.search(r"(\d{1,2}):(\d{2})", text)
+    if m:
+        h, mn = int(m.group(1)), int(m.group(2))
+        # Коррекция: "3 дня" → 15:00
+        if h < 12 and any(w in text for w in ["дня", "днём", "днем", "вечер", "вечером"]):
+            h += 12
+        if h < 7 and any(w in text for w in ["утр", "утром"]):
+            pass  # оставляем как есть для "в 6 утра"
+        return (h, mn)
+
+    # "в X часов", "в X утра/вечера"
+    m = re.search(r"в\s+(\d{1,2})\s*(час|утр|дня|вечер|ноч|:00)?", text)
+    if m:
+        h = int(m.group(1))
+        suffix = (m.group(2) or "").lower()
+        if h < 12 and any(s in suffix for s in ["дня", "вечер", "ноч"]):
+            h += 12
+        return (h, 0)
+
+    # "X часов" без "в"
+    m = re.search(r"(\d{1,2})\s*час", text)
+    if m:
+        h = int(m.group(1))
+        if h < 12 and any(w in text for w in ["дня", "вечер", "ночи"]):
+            h += 12
+        return (h, 0)
+
+    # Дефолт по времени суток
+    for key, hour in time_of_day_defaults.items():
+        if key in text:
+            return (hour, 0)
+
+    return None
+
+
+def parse_russian_datetime(text: str) -> Optional[str]:
+    """
+    Парсит русское описание времени и возвращает "YYYY-MM-DD HH:MM" или None.
+    Понимает:
+    - через N минут/часов/дней
+    - сегодня/завтра/послезавтра в HH:MM
+    - в понедельник/пятницу в HH:MM
+    - 15 декабря в 18:00
+    - утром/вечером/в полдень
+    - следующую неделю
+    """
+    now = datetime.now()
+    text_lower = text.lower()
+
+    # ── Относительное время: "через N минут/часов/дней" ──
+    m = re.search(
+        r"через\s+(\d+|\w+)\s*(минут|минуты|минуту|минутку|час|часа|часов|час|день|дня|дней|неделю|недели)",
+        text_lower
+    )
+    if m:
+        val_str = m.group(1)
+        unit = m.group(2)
+        val = _extract_number(val_str)
+        if val is None:
+            val = 1
+        if "минут" in unit or "минут" in unit:
+            dt = now + timedelta(minutes=val)
+        elif "час" in unit:
+            dt = now + timedelta(hours=val)
+        elif "недел" in unit:
+            dt = now + timedelta(weeks=val)
+        else:  # дней
+            dt = now + timedelta(days=val)
+        return dt.strftime("%Y-%m-%d %H:%M")
+
+    # ── Полчаса / четверть часа ──
+    if re.search(r"через\s+полчас|через\s+пол\s*час", text_lower):
+        return (now + timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M")
+    if re.search(r"через\s+четверть", text_lower):
+        return (now + timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M")
+
+    # ── Базовая дата ──
+    base_date = None
+
+    if "послезавтра" in text_lower:
+        base_date = now + timedelta(days=2)
+    elif "сегодня" in text_lower:
+        base_date = now
+    elif "завтра" in text_lower:
+        base_date = now + timedelta(days=1)
+    elif re.search(r"следующ\w+\s+недел", text_lower):
+        base_date = now + timedelta(weeks=1)
+
+    # День недели
+    if base_date is None:
+        for ru_day, weekday_num in WEEKDAYS_RU.items():
+            if re.search(rf"\b{ru_day}\b", text_lower):
+                days_ahead = weekday_num - now.weekday()
+                if days_ahead <= 0:
+                    days_ahead += 7
+                # "следующий понедельник" → +7
+                if "следующ" in text_lower:
+                    days_ahead += 7
+                base_date = now + timedelta(days=days_ahead)
+                break
+
+    # Конкретная дата: "15 декабря", "1 января"
+    if base_date is None:
+        for month_key, month_num in MONTHS_RU.items():
+            m = re.search(rf"(\d{{1,2}})\s*{month_key}\w*(?:\s+(\d{{4}}))?", text_lower)
+            if m:
+                day = int(m.group(1))
+                year = int(m.group(2)) if m.group(2) else now.year
+                try:
+                    base_date = datetime(year, month_num, day)
+                    if base_date < now and not m.group(2):
+                        base_date = datetime(year + 1, month_num, day)
+                except ValueError:
+                    pass
+                break
+
+    # ── Время суток ──
+    time_tuple = _parse_time_of_day(text_lower)
+
+    if base_date is not None:
+        if time_tuple:
+            h, mn = time_tuple
+            result = base_date.replace(hour=h, minute=mn, second=0, microsecond=0)
+        else:
+            # Нет времени — ставим 9:00 для будущих дат
+            result = base_date.replace(hour=9, minute=0, second=0, microsecond=0)
+        return result.strftime("%Y-%m-%d %H:%M")
+
+    # Только время без даты — считаем сегодня, если уже прошло — завтра
+    if time_tuple:
+        h, mn = time_tuple
+        result = now.replace(hour=h, minute=mn, second=0, microsecond=0)
+        if result <= now:
+            result += timedelta(days=1)
+        return result.strftime("%Y-%m-%d %H:%M")
+
+    return None
+
+
 def parse_task(text: str, remind_default: int = 30) -> dict:
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = datetime.now()
+    now_str = now.strftime("%Y-%m-%d %H:%M")
     prompt = (
         f"Сейчас: {now_str}.\n"
-        f'Пользователь написал задачу: "{text}"\n\n'
-        "Извлеки структуру задачи. Ответь ТОЛЬКО JSON без пояснений и markdown:\n"
+        f'Пользователь написал: "{text}"\n\n'
+        "Твоя задача — извлечь структуру. Ответь ТОЛЬКО JSON без пояснений и markdown:\n"
         "{\n"
-        '  "task": "краткое описание задачи на русском",\n'
+        '  "task": "краткое описание что нужно сделать",\n'
         '  "due_time": "YYYY-MM-DD HH:MM" или null,\n'
-        f'  "remind_minutes_before": целое число ({remind_default} по умолчанию, 0 если нет срока)\n'
+        '  "remind_minutes_before": целое число или 0\n'
         "}\n\n"
+        "ВАЖНЫЕ ПРАВИЛА:\n"
+        "1. Если написано \'через X минут\' или \'через X часов\' — due_time = сейчас + это время\n"
+        "2. Если написано \'напомни через X минут\' без срока — due_time = сейчас + X минут, remind_minutes_before = 0\n"
+        "3. Если написано \'напомни за X минут до\' — remind_minutes_before = X\n"
+        "4. Если срока нет вообще — due_time = null, remind_minutes_before = 0\n"
+        f"5. Если есть срок но не сказано за сколько напомнить — remind_minutes_before = {remind_default}\n\n"
         "Примеры:\n"
-        '- "позвони маме завтра в 18:00" → due_time=завтра 18:00, remind=30\n'
-        '- "купить молоко" → due_time=null, remind=0\n'
-        '- "встреча в пятницу в 10, напомни за час" → due_time=пятница 10:00, remind=60'
+        f'- "напомни позвонить маме через 10 минут" → due_time="{(now + __import__("datetime").timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M")}", remind_minutes_before=0\n'
+        '- "встреча завтра в 10:00, напомни за час" → due_time=завтра 10:00, remind_minutes_before=60\n'
+        '- "купить молоко" → due_time=null, remind_minutes_before=0\n'
+        '- "позвони врачу в пятницу в 15:00" → due_time=ближайшая пятница 15:00, remind_minutes_before=30'
     )
     try:
         raw = ai_complete([{"role": "user", "content": prompt}])
         raw = re.sub(r"```json|```", "", raw).strip()
+        # Берём только JSON если есть лишний текст
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if match:
+            raw = match.group(0)
         return json.loads(raw)
     except Exception as e:
         logger.error(f"Ошибка разбора задачи: {e}")
