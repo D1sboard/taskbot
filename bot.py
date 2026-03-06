@@ -86,19 +86,34 @@ def transcribe_speechkit(ogg_path: str) -> str:
     with open(ogg_path, "rb") as f:
         audio_data = f.read()
 
-    resp = requests.post(
-        "https://stt.api.cloud.yandex.net/speech/v1/stt:recognize",
-        headers={"Authorization": f"Api-Key {YANDEX_SPEECHKIT_KEY}"},
-        params={
+    # Пробуем oggopus, при ошибке — повторяем без указания формата
+    for fmt in ["oggopus", "lpcm"]:
+        params = {
             "folderId": YANDEX_FOLDER_ID,
             "lang": "ru-RU",
-            "format": "oggopus",
-        },
-        data=audio_data,
-        timeout=30,
-    )
+        }
+        if fmt == "oggopus":
+            params["format"] = "oggopus"
+        else:
+            params["format"] = "oggopus"
+            params["sampleRateHertz"] = "48000"
+
+        resp = requests.post(
+            "https://stt.api.cloud.yandex.net/speech/v1/stt:recognize",
+            headers={
+                "Authorization": f"Api-Key {YANDEX_SPEECHKIT_KEY}",
+                "Transfer-Encoding": "chunked",
+            },
+            params=params,
+            data=audio_data,
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            return resp.json().get("result", "")
+        logger.error(f"SpeechKit [{fmt}]: {resp.status_code} {resp.text}")
+
     resp.raise_for_status()
-    return resp.json().get("result", "")
+    return ""
 
 
 def transcribe_vosk(ogg_path: str) -> str:
