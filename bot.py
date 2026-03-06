@@ -561,8 +561,13 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Не смог разобрать речь. Попробуй чётче.")
             return
         await update.message.reply_text(f"📝 *Распознал:* _{text}_", parse_mode="Markdown")
-        update.message.text = text
-        await handle_text(update, context)
+        # Обрабатываем текст напрямую, не меняя объект сообщения
+        if detect_intent(text) == "TASK":
+            await _process_task(update, text)
+        else:
+            await update.message.reply_chat_action("typing")
+            reply = await chat_reply(update.effective_user.id, text)
+            await update.message.reply_text(reply)
     except Exception as e:
         logger.error(f"Ошибка транскрипции: {e}")
         await update.message.reply_text("❌ Ошибка распознавания. Напиши задачу текстом.")
