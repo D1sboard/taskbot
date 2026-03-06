@@ -86,34 +86,21 @@ def transcribe_speechkit(ogg_path: str) -> str:
     with open(ogg_path, "rb") as f:
         audio_data = f.read()
 
-    # Пробуем oggopus, при ошибке — повторяем без указания формата
-    for fmt in ["oggopus", "lpcm"]:
-        params = {
+    resp = requests.post(
+        "https://stt.api.cloud.yandex.net/speech/v1/stt:recognize",
+        headers={"Authorization": f"Api-Key {YANDEX_SPEECHKIT_KEY}"},
+        params={
             "folderId": YANDEX_FOLDER_ID,
             "lang": "ru-RU",
-        }
-        if fmt == "oggopus":
-            params["format"] = "oggopus"
-        else:
-            params["format"] = "oggopus"
-            params["sampleRateHertz"] = "48000"
-
-        resp = requests.post(
-            "https://stt.api.cloud.yandex.net/speech/v1/stt:recognize",
-            headers={
-                "Authorization": f"Api-Key {YANDEX_SPEECHKIT_KEY}",
-                "Transfer-Encoding": "chunked",
-            },
-            params=params,
-            data=audio_data,
-            timeout=30,
-        )
-        if resp.status_code == 200:
-            return resp.json().get("result", "")
-        logger.error(f"SpeechKit [{fmt}]: {resp.status_code} {resp.text}")
-
+            "format": "oggopus",
+            "sampleRateHertz": "48000",
+        },
+        data=audio_data,
+        timeout=30,
+    )
+    logger.info(f"SpeechKit response: {resp.status_code} {resp.text[:200]}")
     resp.raise_for_status()
-    return ""
+    return resp.json().get("result", "")
 
 
 def transcribe_vosk(ogg_path: str) -> str:
@@ -243,8 +230,8 @@ def yandexgpt_complete(messages: list[dict], system: str = "") -> str:
             "x-folder-id": YANDEX_FOLDER_ID,
         },
         json={
-            "modelUri": f"gpt://{YANDEX_FOLDER_ID}/yandexgpt/latest",
-            "completionOptions": {"stream": False, "temperature": 0.6, "maxTokens": "1000"},
+            "modelUri": f"gpt://{YANDEX_FOLDER_ID}/yandexgpt-lite/latest",
+            "completionOptions": {"stream": False, "temperature": 0.6, "maxTokens": "2000"},
             "messages": payload_messages,
         },
         timeout=30,
